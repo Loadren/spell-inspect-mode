@@ -110,8 +110,8 @@ local function PopulatePlayerTalents(spellTable, lookupTable)
             local definitionInfo = C_Traits.GetDefinitionInfo(entryInfo.definitionID)
             local talentSpellID = definitionInfo.spellID
             if talentSpellID then
-                local talentName = GetSpellInfo(talentSpellID)
-                local isPassive = C_Spell.IsSpellPassive(talentSpellID)
+                local talentName = C_Spell.GetSpellInfo(talentSpellID).name -- GetSpellInfo without C_Spell is deprecated
+                local isPassive = C_Spell.IsSpellPassive(talentSpellID) -- GetSpellInfo without C_Spell is deprecated
                 if spellTable[talentName] and isPassive then
                     -- Skip passive spells if an active spell with the same name exists
                 else
@@ -161,10 +161,11 @@ local function createCustomTooltip()
     return tooltip
 end
 
+
 -- Function to toggle inspect mode state
--- Toggles between activating and deactivating inspect mode based on the current state and hovered spell
+-- Toggles between activating and deactivating inspect mode based on the current state and hovered spell or item
 function SpellInspectMode:ToggleInspectMode()
-    local spellID
+    local spellID, itemID
 
     if lastHoveredSpellID then
         spellID = lastHoveredSpellID
@@ -172,21 +173,33 @@ function SpellInspectMode:ToggleInspectMode()
         -- Fallback to GameTooltip spellID if no hyperlink is hovered
         local _, gameTooltipSpellID = GameTooltip:GetSpell()
         spellID = gameTooltipSpellID
+        
+        -- If no spell ID found, check if we're hovering over an item
+        if not spellID then
+            local _, itemLink = GameTooltip:GetItem()
+            if itemLink then
+                -- Extract item ID from the item link
+                itemID = tonumber(string.match(itemLink, "item:(%d+)"))
+            end
+        end
     end
 
     if spellID then
-        -- Activating or swapping inspect mode for a new spell ID
-        SpellInspectMode:ActivateInspectMode(spellID)
+        -- Activating or swapping inspect mode for a spell ID
+        SpellInspectMode:ActivateInspectMode(spellID, nil)
+    elseif itemID then
+        -- Activating or swapping inspect mode for an item ID
+        SpellInspectMode:ActivateInspectMode(nil, itemID)
     elseif isInInspectMode then
         -- Exiting inspect mode or closing the latest opened tooltip
         SpellInspectMode:DeactivateInspectMode()
     end
 end
 
--- Function to activate inspect mode for a specific spell ID
--- Shows the overlay and positions the tooltip with the spell information
-function SpellInspectMode:ActivateInspectMode(spellID)
-    if spellID then
+-- Function to activate inspect mode for a specific spell ID or item ID
+-- Shows the overlay and positions the tooltip with the spell or item information
+function SpellInspectMode:ActivateInspectMode(spellID, itemID)
+    if spellID or itemID then
         isInInspectMode = true
 
         -- Show the overlay
@@ -207,33 +220,48 @@ function SpellInspectMode:ActivateInspectMode(spellID)
         newTooltip:SetOwner(UIParent, "ANCHOR_NONE")
         newTooltip:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", cursorX, cursorY)
 
-        -- Asynchronously load spell data
-        local spell = Spell:CreateFromSpellID(spellID)
-        local function OnSpellDataLoaded()
-            newTooltip:SetSpellByID(spellID)
+        if spellID then
+            -- Handle spell tooltips
+            local spell = Spell:CreateFromSpellID(spellID)
+            local function OnSpellDataLoaded()
+                newTooltip:SetSpellByID(spellID)
 
-            -- Fetch the spell icon
-            local spellIcon = GetSpellTexture(spellID)
-            if spellIcon then
-                local tooltipTextureInfo = {
-                    width = 32,
-                    height = 32,
-                    anchor = Enum.TooltipTextureAnchor.LeftBottom,
-                    margin = { left = 0, right = 8, top = 0, bottom = 0 },
-                    region = Enum.TooltipTextureRelativeRegion.LeftLine,
-                }
-                -- I'd love to add texture at the top left of the tooltip, but it adds the texture at the last "AddLine" position.
-                -- So, I'm adding it at the bottom left of the tooltip.
-                newTooltip:AddTexture(spellIcon, tooltipTextureInfo)
+                -- Fetch the spell icon
+                local spellIcon = C_Spell.GetSpellTexture(spellID)
+                if spellIcon then
+                    local tooltipTextureInfo = {
+                        width = 32,
+                        height = 32,
+                        anchor = Enum.TooltipTextureAnchor.LeftBottom,
+                        margin = { left = 0, right = 8, top = 0, bottom = 0 },
+                        region = Enum.TooltipTextureRelativeRegion.LeftLine,
+                    }
+                    -- I'd love to add texture at the top left of the tooltip, but it adds the texture at the last "AddLine" position.
+                    -- So, I'm adding it at the bottom left of the tooltip.
+                    newTooltip:AddTexture(spellIcon, tooltipTextureInfo)
+                end
+
+                SpellInspectMode:ProcessTooltipData(newTooltip)
             end
 
-            SpellInspectMode:ProcessTooltipData(newTooltip)
-        end
+            if spell:IsSpellDataCached() then
+                OnSpellDataLoaded()
+            else
+                spell:ContinueOnSpellLoad(OnSpellDataLoaded)
+            end
+        elseif itemID then
+            -- Handle item tooltips
+            local item = Item:CreateFromItemID(itemID)
+            local function OnItemDataLoaded()
+                newTooltip:SetItemByID(itemID)
+                SpellInspectMode:ProcessTooltipData(newTooltip)
+            end
 
-        if spell:IsSpellDataCached() then
-            OnSpellDataLoaded()
-        else
-            spell:ContinueOnSpellLoad(OnSpellDataLoaded)
+            if item:IsItemDataCached() then
+                OnItemDataLoaded()
+            else
+                item:ContinueOnItemLoad(OnItemDataLoaded)
+            end
         end
 
         -- Set frame strata and level for proper layering
@@ -317,6 +345,13 @@ end
 -- Register the function for the spell tooltip data type
 -- Ensures tooltips are processed when displaying spell data
 TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Spell, function(tooltip)
+    if tooltip:GetName() == "GameTooltip" then
+        SpellInspectMode:ProcessTooltipData(tooltip)
+    end
+end)
+
+-- Need to do it also on items, because some tier sets have spell names in their tooltip
+TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip)
     if tooltip:GetName() == "GameTooltip" then
         SpellInspectMode:ProcessTooltipData(tooltip)
     end

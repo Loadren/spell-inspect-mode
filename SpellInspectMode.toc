@@ -1,9 +1,10 @@
-## Interface: 110000
+## Interface: 110200
 ## Title: |cFFFFA500Spell Inspect Mode|r
 ## Notes: |cFF00FFFFBring the BG3 Inspect Mode to WoW!|r
 ## Author: Loadren
-## Version: 1.0.3
+## Version: 1.2.0
 ## SavedVariables: SpellInspectModeDB
+## X-Curse-Project-ID: 1074689
 ## IconTexture: 132860
 
 SpellInspectMode.lua
